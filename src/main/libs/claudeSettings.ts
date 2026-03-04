@@ -106,6 +106,10 @@ function providerRequiresApiKey(providerName: string): boolean {
 // Copilot token cache for main process
 let copilotTokenCache: { token: string; expiresAt: number } | null = null;
 
+export function clearCopilotTokenCache(): void {
+  copilotTokenCache = null;
+}
+
 async function getCopilotApiToken(githubToken: string): Promise<string | null> {
   const now = Math.floor(Date.now() / 1000);
   if (copilotTokenCache && copilotTokenCache.expiresAt > now + 60) {

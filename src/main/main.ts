@@ -8,7 +8,7 @@ import { CoworkStore } from './coworkStore';
 import { CoworkRunner } from './libs/coworkRunner';
 import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, getCurrentApiConfigAsync, resolveCurrentApiConfig, resolveCurrentApiConfigAsync, setStoreGetter } from './libs/claudeSettings';
+import { clearCopilotTokenCache, getCurrentApiConfig, getCurrentApiConfigAsync, resolveCurrentApiConfig, resolveCurrentApiConfigAsync, setStoreGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
@@ -2373,7 +2373,8 @@ if (!gotTheLock) {
         error_description?: string;
       };
       if (data.access_token) {
-        copilotTokenCache = null; // Invalidate cached Copilot token
+        copilotTokenCache = null; // Invalidate cached Copilot token in main.ts
+        clearCopilotTokenCache(); // Also invalidate cache in claudeSettings.ts
         return { success: true, accessToken: data.access_token };
       }
       return { success: false, pending: data.error === 'authorization_pending', error: data.error_description || data.error };
