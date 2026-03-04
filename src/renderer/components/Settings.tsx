@@ -1271,6 +1271,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         setCopilotSignInError(result.error || i18nService.t('copilotSignInFailed'));
         return;
       }
+      if (!result.deviceCode || !result.userCode || !result.verificationUri) {
+        setCopilotSignInError(i18nService.t('copilotSignInFailed'));
+        return;
+      }
       setCopilotDeviceFlow({
         deviceCode: result.deviceCode,
         userCode: result.userCode,
@@ -1285,6 +1289,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       copilotPollTimerRef.current = window.setInterval(async () => {
         const pollResult = await window.electron.copilot.pollDeviceFlow(result.deviceCode);
         if (pollResult.success && pollResult.accessToken) {
+          const accessToken = pollResult.accessToken;
           if (copilotPollTimerRef.current != null) {
             window.clearInterval(copilotPollTimerRef.current);
             copilotPollTimerRef.current = null;
@@ -1295,7 +1300,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,
             copilot: {
               ...prev.copilot,
-              apiKey: pollResult.accessToken,
+              apiKey: accessToken,
               enabled: true,
             },
           }));
