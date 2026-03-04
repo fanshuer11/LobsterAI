@@ -1275,19 +1275,22 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         setCopilotSignInError(i18nService.t('copilotSignInFailed'));
         return;
       }
+      const deviceCode = result.deviceCode;
+      const userCode = result.userCode;
+      const verificationUri = result.verificationUri;
       setCopilotDeviceFlow({
-        deviceCode: result.deviceCode,
-        userCode: result.userCode,
-        verificationUri: result.verificationUri,
+        deviceCode,
+        userCode,
+        verificationUri,
         interval: result.interval || 5,
       });
-      void window.electron.shell.openExternal(result.verificationUri);
+      void window.electron.shell.openExternal(verificationUri);
       if (copilotPollTimerRef.current != null) {
         window.clearInterval(copilotPollTimerRef.current);
       }
       const pollIntervalMs = (result.interval || 5) * 1000;
       copilotPollTimerRef.current = window.setInterval(async () => {
-        const pollResult = await window.electron.copilot.pollDeviceFlow(result.deviceCode);
+        const pollResult = await window.electron.copilot.pollDeviceFlow(deviceCode);
         if (pollResult.success && pollResult.accessToken) {
           const accessToken = pollResult.accessToken;
           if (copilotPollTimerRef.current != null) {
