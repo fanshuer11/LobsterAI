@@ -37,6 +37,7 @@ import {
   OpenRouterIcon,
   OllamaIcon,
   CustomProviderIcon,
+  GitHubCopilotIcon,
 } from './icons/providers';
 
 type TabType = 'general' | 'model' | 'coworkSandbox' | 'coworkMemory' | 'shortcuts' | 'im' | 'email' | 'about';
@@ -51,6 +52,7 @@ interface SettingsProps extends SettingsOpenOptions {
 }
 
 const providerKeys = [
+  'copilot',
   'openai',
   'gemini',
   'anthropic',
@@ -120,6 +122,7 @@ interface ProvidersImportPayload {
 }
 
 const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
+  copilot: { label: 'GitHub Copilot', icon: <GitHubCopilotIcon /> },
   openai: { label: 'OpenAI', icon: <OpenAIIcon /> },
   deepseek: { label: 'DeepSeek', icon: <DeepSeekIcon /> },
   gemini: { label: 'Gemini', icon: <GeminiIcon /> },
@@ -178,7 +181,7 @@ const providerSwitchableDefaultBaseUrls: Partial<Record<ProviderType, { anthropi
   },
 };
 
-const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama';
+const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'copilot';
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -390,6 +393,23 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
   const [appVersion, setAppVersion] = useState('');
   const [emailCopied, setEmailCopied] = useState(false);
   const [isExportingLogs, setIsExportingLogs] = useState(false);
+
+  // Copilot OAuth state
+  const [copilotDeviceFlow, setCopilotDeviceFlow] = useState<{
+    deviceCode: string;
+    userCode: string;
+    verificationUri: string;
+    interval: number;
+  } | null>(null);
+  const [copilotSigningIn, setCopilotSigningIn] = useState(false);
+  const [copilotSignInError, setCopilotSignInError] = useState<string | null>(null);
+  const copilotPollTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (copilotPollTimerRef.current != null) {
+      window.clearInterval(copilotPollTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     window.electron.appInfo.getVersion().then(setAppVersion);
@@ -1006,9 +1026,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     const providerConfig = providers[provider];
     const isEnabling = !providerConfig.enabled;
     const missingApiKey = providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
+    const missingCopilotToken = provider === 'copilot' && !providerConfig.apiKey.trim();
 
     if (isEnabling && missingApiKey) {
       setError(i18nService.t('apiKeyRequired'));
+      return;
+    }
+
+    if (isEnabling && missingCopilotToken) {
+      setError(i18nService.t('copilotNotSignedIn'));
       return;
     }
 
@@ -1235,6 +1261,88 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setModelFormError(null);
   };
 
+  const handleCopilotSignIn = async () => {
+    setCopilotSigningIn(true);
+    setCopilotSignInError(null);
+    setCopilotDeviceFlow(null);
+    try {
+      const result = await (window.electron as any).copilot.startDeviceFlow();
+      if (!result.success) {
+        setCopilotSignInError(result.error || i18nService.t('copilotSignInFailed'));
+        return;
+      }
+      setCopilotDeviceFlow({
+        deviceCode: result.deviceCode,
+        userCode: result.userCode,
+        verificationUri: result.verificationUri,
+        interval: result.interval || 5,
+      });
+      void window.electron.shell.openExternal(result.verificationUri);
+      if (copilotPollTimerRef.current != null) {
+        window.clearInterval(copilotPollTimerRef.current);
+      }
+      const pollIntervalMs = (result.interval || 5) * 1000;
+      copilotPollTimerRef.current = window.setInterval(async () => {
+        const pollResult = await (window.electron as any).copilot.pollDeviceFlow(result.deviceCode);
+        if (pollResult.success && pollResult.accessToken) {
+          if (copilotPollTimerRef.current != null) {
+            window.clearInterval(copilotPollTimerRef.current);
+            copilotPollTimerRef.current = null;
+          }
+          setCopilotDeviceFlow(null);
+          setCopilotSigningIn(false);
+          setProviders(prev => ({
+            ...prev,
+            copilot: {
+              ...prev.copilot,
+              apiKey: pollResult.accessToken,
+              enabled: true,
+            },
+          }));
+        } else if (!pollResult.pending) {
+          if (copilotPollTimerRef.current != null) {
+            window.clearInterval(copilotPollTimerRef.current);
+            copilotPollTimerRef.current = null;
+          }
+          setCopilotDeviceFlow(null);
+          setCopilotSigningIn(false);
+          setCopilotSignInError(pollResult.error || i18nService.t('copilotSignInFailed'));
+        }
+      }, pollIntervalMs);
+    } catch (err) {
+      setCopilotSignInError(err instanceof Error ? err.message : i18nService.t('copilotSignInFailed'));
+      setCopilotSigningIn(false);
+    }
+  };
+
+  const handleCopilotSignOut = () => {
+    if (copilotPollTimerRef.current != null) {
+      window.clearInterval(copilotPollTimerRef.current);
+      copilotPollTimerRef.current = null;
+    }
+    setCopilotDeviceFlow(null);
+    setCopilotSigningIn(false);
+    setCopilotSignInError(null);
+    setProviders(prev => ({
+      ...prev,
+      copilot: {
+        ...prev.copilot,
+        apiKey: '',
+        enabled: false,
+      },
+    }));
+  };
+
+  const handleCopilotCancelSignIn = () => {
+    if (copilotPollTimerRef.current != null) {
+      window.clearInterval(copilotPollTimerRef.current);
+      copilotPollTimerRef.current = null;
+    }
+    setCopilotDeviceFlow(null);
+    setCopilotSigningIn(false);
+    setCopilotSignInError(null);
+  };
+
   const handleModelDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -1276,6 +1384,48 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     const firstModel = providerConfig.models?.[0];
     if (!firstModel) {
       showTestResultModal({ success: false, message: i18nService.t('noModelsConfigured') }, testingProvider);
+      setIsTesting(false);
+      return;
+    }
+
+    // Handle Copilot provider - exchange GitHub token for Copilot API token
+    if (testingProvider === 'copilot') {
+      if (!providerConfig.apiKey) {
+        showTestResultModal({ success: false, message: i18nService.t('copilotNotSignedIn') }, testingProvider);
+        setIsTesting(false);
+        return;
+      }
+      try {
+        const tokenResult = await (window.electron as any).copilot.getToken(providerConfig.apiKey);
+        if (!tokenResult.success || !tokenResult.token) {
+          showTestResultModal({ success: false, message: tokenResult.error || i18nService.t('copilotTokenFetchFailed') }, testingProvider);
+          setIsTesting(false);
+          return;
+        }
+        const openaiUrl = `${providerConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+        const response = await window.electron.api.fetch({
+          url: openaiUrl,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${tokenResult.token}`,
+          },
+          body: JSON.stringify({
+            model: firstModel.id,
+            messages: [{ role: 'user', content: 'Hi' }],
+            max_tokens: CONNECTIVITY_TEST_TOKEN_BUDGET,
+          }),
+        });
+        if (response.ok) {
+          showTestResultModal({ success: true, message: i18nService.t('connectionSuccess') }, testingProvider);
+        } else {
+          const data = response.data || {};
+          const errorMessage = data.error?.message || data.message || `${i18nService.t('connectionFailed')}: ${response.status}`;
+          showTestResultModal({ success: false, message: errorMessage }, testingProvider);
+        }
+      } catch (err) {
+        showTestResultModal({ success: false, message: err instanceof Error ? err.message : i18nService.t('connectionFailed') }, testingProvider);
+      }
       setIsTesting(false);
       return;
     }
@@ -2207,7 +2357,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 const providerKey = provider as ProviderType;
                 const providerInfo = providerMeta[providerKey];
                 const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
-                const canToggleProvider = config.enabled || !missingApiKey;
+                const missingCopilotToken = providerKey === 'copilot' && !config.apiKey.trim();
+                const canToggleProvider = config.enabled || (!missingApiKey && !missingCopilotToken);
                 return (
                   <div
                     key={provider}
@@ -2293,7 +2444,90 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 </div>
               )}
 
-              <div>
+              {/* GitHub Copilot special auth UI */}
+              {activeProvider === 'copilot' && (
+                <div className="space-y-4">
+                  <div className="p-3 rounded-xl dark:bg-claude-darkSurface/50 bg-claude-surface/50 border dark:border-claude-darkBorder border-claude-border">
+                    <div className="text-xs font-medium dark:text-claude-darkText text-claude-text mb-2">
+                      {i18nService.t('copilotAuthTitle')}
+                    </div>
+                    {providers.copilot.apiKey ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
+                          <CheckCircleIcon className="h-4 w-4" />
+                          <span>{i18nService.t('copilotSignedIn')}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopilotSignOut}
+                          className="text-xs text-red-500 dark:text-red-400 hover:underline"
+                        >
+                          {i18nService.t('copilotSignOut')}
+                        </button>
+                      </div>
+                    ) : copilotDeviceFlow ? (
+                      <div className="space-y-3">
+                        <div className="text-xs dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                          {i18nService.t('copilotDeviceFlowInstructions')}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <code className="text-base font-mono font-bold tracking-widest dark:text-claude-darkText text-claude-text bg-claude-surfaceInset dark:bg-claude-darkSurfaceInset px-3 py-1.5 rounded-lg border dark:border-claude-darkBorder border-claude-border">
+                            {copilotDeviceFlow.userCode}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => copyTextToClipboard(copilotDeviceFlow.userCode)}
+                            className="text-xs text-claude-accent hover:underline"
+                          >
+                            {i18nService.t('copilotCopyCode')}
+                          </button>
+                        </div>
+                        <a
+                          href="#"
+                          onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(copilotDeviceFlow.verificationUri); }}
+                          className="text-xs text-claude-accent hover:underline block"
+                        >
+                          {copilotDeviceFlow.verificationUri}
+                        </a>
+                        <div className="flex items-center gap-2 text-xs dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                          <div className="animate-spin h-3 w-3 border border-claude-accent border-t-transparent rounded-full" />
+                          {i18nService.t('copilotWaitingForAuth')}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCopilotCancelSignIn}
+                          className="text-xs text-claude-secondaryText dark:text-claude-darkSecondaryText hover:underline"
+                        >
+                          {i18nService.t('cancel')}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="text-xs dark:text-claude-darkSecondaryText text-claude-secondaryText mb-2">
+                          {i18nService.t('copilotSignInDescription')}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { void handleCopilotSignIn(); }}
+                          disabled={copilotSigningIn}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-800 dark:bg-gray-700 hover:bg-gray-700 dark:hover:bg-gray-600 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                        >
+                          <GitHubCopilotIcon className="h-3.5 w-3.5" />
+                          {copilotSigningIn ? i18nService.t('copilotSigningIn') : i18nService.t('copilotSignInWithGitHub')}
+                        </button>
+                        {copilotSignInError && (
+                          <div className="text-xs text-red-500 dark:text-red-400">{copilotSignInError}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-xs dark:text-claude-darkSecondaryText text-claude-secondaryText">
+                    {i18nService.t('copilotRequiresSubscription')}
+                  </div>
+                </div>
+              )}
+
+              {activeProvider !== 'copilot' && (<div>
                 <label htmlFor={`${activeProvider}-baseUrl`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                   {i18nService.t('baseUrl')}
                 </label>
@@ -2371,9 +2605,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                   </div>
                 )}
               </div>
+              )}
 
               {/* API 格式选择器 */}
-              {shouldShowApiFormatSelector(activeProvider) && (
+              {activeProvider !== 'copilot' && shouldShowApiFormatSelector(activeProvider) && (
                 <div>
                   <label htmlFor={`${activeProvider}-apiFormat`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text mb-1">
                     {i18nService.t('apiFormat')}
@@ -2529,7 +2764,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
+                  disabled={isTesting || ((providerRequiresApiKey(activeProvider) || activeProvider === 'copilot') && !providers[activeProvider].apiKey)}
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />

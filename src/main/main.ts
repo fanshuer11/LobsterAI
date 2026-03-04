@@ -8,7 +8,7 @@ import { CoworkStore } from './coworkStore';
 import { CoworkRunner } from './libs/coworkRunner';
 import { SkillManager } from './skillManager';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { getCurrentApiConfig, resolveCurrentApiConfig, setStoreGetter } from './libs/claudeSettings';
+import { getCurrentApiConfig, getCurrentApiConfigAsync, resolveCurrentApiConfig, resolveCurrentApiConfigAsync, setStoreGetter } from './libs/claudeSettings';
 import { saveCoworkApiConfig } from './libs/coworkConfigStore';
 import { generateSessionTitle } from './libs/coworkUtil';
 import { ensureSandboxReady, getSandboxStatus, onSandboxProgress } from './libs/coworkSandboxRuntime';
@@ -789,6 +789,9 @@ onSandboxProgress((progress) => {
   });
 });
 let isQuitting = false;
+
+// GitHub Copilot token cache
+let copilotTokenCache: { token: string; expiresAt: number } | null = null;
 
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
@@ -1917,11 +1920,11 @@ if (!gotTheLock) {
   });
 
   ipcMain.handle('get-api-config', async () => {
-    return getCurrentApiConfig();
+    return getCurrentApiConfigAsync();
   });
 
   ipcMain.handle('check-api-config', async () => {
-    const { config, error } = resolveCurrentApiConfig();
+    const { config, error } = await resolveCurrentApiConfigAsync();
     return { hasConfig: config !== null, config, error };
   });
 
@@ -2265,6 +2268,118 @@ if (!gotTheLock) {
       return true;
     }
     return false;
+  });
+
+  // GitHub Copilot: get a fresh Copilot API token using stored GitHub token
+  ipcMain.handle('copilot:getToken', async (_event, githubToken: unknown) => {
+    if (typeof githubToken !== 'string' || !githubToken.trim()) {
+      return { success: false, error: 'GitHub token is required' };
+    }
+    const now = Math.floor(Date.now() / 1000);
+    if (copilotTokenCache && copilotTokenCache.expiresAt > now + 60) {
+      return { success: true, token: copilotTokenCache.token };
+    }
+    try {
+      const response = await session.defaultSession.fetch(
+        'https://api.github.com/copilot_internal/v2/token',
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `token ${githubToken.trim()}`,
+            'Accept': 'application/json',
+            'User-Agent': 'LobsterAI',
+          },
+        }
+      );
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { success: false, error: `Failed to get Copilot token: ${response.status} ${errorText}` };
+      }
+      const data = await response.json() as { token: string; expires_at: number };
+      copilotTokenCache = { token: data.token, expiresAt: data.expires_at };
+      return { success: true, token: data.token };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to get Copilot token' };
+    }
+  });
+
+  // GitHub Copilot: start OAuth device flow
+  ipcMain.handle('copilot:startDeviceFlow', async () => {
+    try {
+      const response = await session.defaultSession.fetch(
+        'https://github.com/login/device/code',
+        {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: 'Iv1.b507a08c87ecfe98',
+            scope: 'read:user',
+          }),
+        }
+      );
+      if (!response.ok) {
+        return { success: false, error: `GitHub API error: ${response.status}` };
+      }
+      const data = await response.json() as {
+        device_code: string;
+        user_code: string;
+        verification_uri: string;
+        expires_in: number;
+        interval: number;
+      };
+      return {
+        success: true,
+        deviceCode: data.device_code,
+        userCode: data.user_code,
+        verificationUri: data.verification_uri,
+        expiresIn: data.expires_in,
+        interval: data.interval,
+      };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to start device flow' };
+    }
+  });
+
+  // GitHub Copilot: poll for OAuth access token
+  ipcMain.handle('copilot:pollDeviceFlow', async (_event, deviceCode: unknown) => {
+    if (typeof deviceCode !== 'string' || !deviceCode.trim()) {
+      return { success: false, error: 'Device code is required' };
+    }
+    try {
+      const response = await session.defaultSession.fetch(
+        'https://github.com/login/oauth/access_token',
+        {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: 'Iv1.b507a08c87ecfe98',
+            device_code: deviceCode.trim(),
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          }),
+        }
+      );
+      if (!response.ok) {
+        return { success: false, error: `GitHub API error: ${response.status}` };
+      }
+      const data = await response.json() as {
+        access_token?: string;
+        error?: string;
+        error_description?: string;
+      };
+      if (data.access_token) {
+        copilotTokenCache = null; // Invalidate cached Copilot token
+        return { success: true, accessToken: data.access_token };
+      }
+      return { success: false, pending: data.error === 'authorization_pending', error: data.error_description || data.error };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to poll device flow' };
+    }
   });
 
   // 设置 Content Security Policy
