@@ -1269,10 +1269,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       const result = await window.electron.copilot.startDeviceFlow();
       if (!result.success) {
         setCopilotSignInError(result.error || i18nService.t('copilotSignInFailed'));
+        setCopilotSigningIn(false);
         return;
       }
       if (!result.deviceCode || !result.userCode || !result.verificationUri) {
         setCopilotSignInError(i18nService.t('copilotSignInFailed'));
+        setCopilotSigningIn(false);
         return;
       }
       const deviceCode = result.deviceCode;
