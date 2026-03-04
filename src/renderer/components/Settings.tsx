@@ -1269,22 +1269,32 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       const result = await window.electron.copilot.startDeviceFlow();
       if (!result.success) {
         setCopilotSignInError(result.error || i18nService.t('copilotSignInFailed'));
+        setCopilotSigningIn(false);
         return;
       }
+      if (!result.deviceCode || !result.userCode || !result.verificationUri) {
+        setCopilotSignInError(i18nService.t('copilotSignInFailed'));
+        setCopilotSigningIn(false);
+        return;
+      }
+      const deviceCode = result.deviceCode;
+      const userCode = result.userCode;
+      const verificationUri = result.verificationUri;
       setCopilotDeviceFlow({
-        deviceCode: result.deviceCode,
-        userCode: result.userCode,
-        verificationUri: result.verificationUri,
+        deviceCode,
+        userCode,
+        verificationUri,
         interval: result.interval || 5,
       });
-      void window.electron.shell.openExternal(result.verificationUri);
+      void window.electron.shell.openExternal(verificationUri);
       if (copilotPollTimerRef.current != null) {
         window.clearInterval(copilotPollTimerRef.current);
       }
       const pollIntervalMs = (result.interval || 5) * 1000;
       copilotPollTimerRef.current = window.setInterval(async () => {
-        const pollResult = await window.electron.copilot.pollDeviceFlow(result.deviceCode);
+        const pollResult = await window.electron.copilot.pollDeviceFlow(deviceCode);
         if (pollResult.success && pollResult.accessToken) {
+          const accessToken = pollResult.accessToken;
           if (copilotPollTimerRef.current != null) {
             window.clearInterval(copilotPollTimerRef.current);
             copilotPollTimerRef.current = null;
@@ -1295,7 +1305,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
             ...prev,
             copilot: {
               ...prev.copilot,
-              apiKey: pollResult.accessToken,
+              apiKey: accessToken,
               enabled: true,
             },
           }));
