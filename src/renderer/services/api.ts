@@ -271,7 +271,7 @@ class ApiService {
     const normalizedHint = providerHint?.toLowerCase();
     if (
       normalizedHint
-      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama', 'custom'].includes(normalizedHint)
+      && ['openai', 'deepseek', 'moonshot', 'zhipu', 'minimax', 'qwen', 'openrouter', 'gemini', 'anthropic', 'xiaomi', 'volcengine', 'ollama', 'custom', 'copilot'].includes(normalizedHint)
     ) {
       return normalizedHint;
     }
@@ -390,6 +390,19 @@ class ApiService {
     const providerConfig = this.getProviderConfig(provider);
     if (providerConfig) {
       effectiveConfig = providerConfig;
+    }
+
+    // For Copilot provider, exchange GitHub token for a dynamic Copilot API token
+    if (provider === 'copilot') {
+      const githubToken = effectiveConfig.apiKey;
+      if (!githubToken) {
+        throw new ApiError('GitHub token not configured for Copilot. Please sign in with GitHub in settings.');
+      }
+      const tokenResult = await window.electron.copilot.getToken(githubToken);
+      if (!tokenResult.success || !tokenResult.token) {
+        throw new ApiError(tokenResult.error || 'Failed to get Copilot token. Please check your GitHub token in settings.');
+      }
+      effectiveConfig = { ...effectiveConfig, apiKey: tokenResult.token };
     }
 
     if (this.providerRequiresApiKey(provider) && !effectiveConfig.apiKey) {

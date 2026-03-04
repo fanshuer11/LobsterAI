@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
 import { delimiter, dirname, join } from 'path';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import { loadClaudeSdk } from './claudeSdk';
-import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig } from './claudeSettings';
+import { buildEnvForConfig, getClaudeCodePath, getCurrentApiConfig, getCurrentApiConfigAsync } from './claudeSettings';
 import type { OpenAICompatProxyTarget } from './coworkOpenAICompatProxy';
 import { getInternalApiBaseURL } from './coworkOpenAICompatProxy';
 import { coworkLog } from './coworkLogger';
@@ -940,7 +940,7 @@ export function getSkillsRoot(): string {
  * Async function to fetch system proxy and inject into environment variables
  */
 export async function getEnhancedEnv(target: OpenAICompatProxyTarget = 'local'): Promise<Record<string, string | undefined>> {
-  const config = getCurrentApiConfig(target);
+  const config = await getCurrentApiConfigAsync(target);
   const env = config
     ? buildEnvForConfig(config)
     : { ...process.env };

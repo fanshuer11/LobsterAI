@@ -386,6 +386,24 @@ interface IElectronAPI {
   networkStatus: {
     send: (status: 'online' | 'offline') => void;
   };
+  copilot: {
+    getToken: (githubToken: string) => Promise<{ success: boolean; token?: string; error?: string }>;
+    startDeviceFlow: () => Promise<{
+      success: boolean;
+      deviceCode?: string;
+      userCode?: string;
+      verificationUri?: string;
+      expiresIn?: number;
+      interval?: number;
+      error?: string;
+    }>;
+    pollDeviceFlow: (deviceCode: string) => Promise<{
+      success: boolean;
+      accessToken?: string;
+      pending?: boolean;
+      error?: string;
+    }>;
+  };
 }
 
 // IM Gateway types

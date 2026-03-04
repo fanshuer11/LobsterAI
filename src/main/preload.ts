@@ -320,4 +320,9 @@ contextBridge.exposeInMainWorld('electron', {
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
   },
+  copilot: {
+    getToken: (githubToken: string) => ipcRenderer.invoke('copilot:getToken', githubToken),
+    startDeviceFlow: () => ipcRenderer.invoke('copilot:startDeviceFlow'),
+    pollDeviceFlow: (deviceCode: string) => ipcRenderer.invoke('copilot:pollDeviceFlow', deviceCode),
+  },
 });
