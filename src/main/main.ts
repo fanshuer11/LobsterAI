@@ -790,8 +790,8 @@ onSandboxProgress((progress) => {
 });
 let isQuitting = false;
 
-// GitHub Copilot token cache
-let copilotTokenCache: { token: string; expiresAt: number } | null = null;
+// GitHub Copilot token cache, keyed by GitHub token to prevent cross-account reuse
+const copilotTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 // 存储活跃的流式请求控制器
 const activeStreamControllers = new Map<string, AbortController>();
@@ -2275,9 +2275,11 @@ if (!gotTheLock) {
     if (typeof githubToken !== 'string' || !githubToken.trim()) {
       return { success: false, error: 'GitHub token is required' };
     }
+    const token = githubToken.trim();
     const now = Math.floor(Date.now() / 1000);
-    if (copilotTokenCache && copilotTokenCache.expiresAt > now + 60) {
-      return { success: true, token: copilotTokenCache.token };
+    const cached = copilotTokenCache.get(token);
+    if (cached && cached.expiresAt > now + 60) {
+      return { success: true, token: cached.token };
     }
     try {
       const response = await session.defaultSession.fetch(
@@ -2285,7 +2287,7 @@ if (!gotTheLock) {
         {
           method: 'GET',
           headers: {
-            'Authorization': `token ${githubToken.trim()}`,
+            'Authorization': `token ${token}`,
             'Accept': 'application/json',
             'User-Agent': 'LobsterAI',
           },
@@ -2296,7 +2298,7 @@ if (!gotTheLock) {
         return { success: false, error: `Failed to get Copilot token: ${response.status} ${errorText}` };
       }
       const data = await response.json() as { token: string; expires_at: number };
-      copilotTokenCache = { token: data.token, expiresAt: data.expires_at };
+      copilotTokenCache.set(token, { token: data.token, expiresAt: data.expires_at });
       return { success: true, token: data.token };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get Copilot token' };
@@ -2373,7 +2375,7 @@ if (!gotTheLock) {
         error_description?: string;
       };
       if (data.access_token) {
-        copilotTokenCache = null; // Invalidate cached Copilot token in main.ts
+        copilotTokenCache.clear(); // Invalidate cached Copilot token in main.ts
         clearCopilotTokenCache(); // Also invalidate cache in claudeSettings.ts
         return { success: true, accessToken: data.access_token };
       }

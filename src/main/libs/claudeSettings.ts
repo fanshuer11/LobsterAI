@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { app } from 'electron';
+import { app, session } from 'electron';
 import type { SqliteStore } from '../sqliteStore';
 import type { CoworkApiConfig } from './coworkConfigStore';
 import {
@@ -103,20 +103,22 @@ function providerRequiresApiKey(providerName: string): boolean {
   return providerName !== 'ollama';
 }
 
-// Copilot token cache for main process
-let copilotTokenCache: { token: string; expiresAt: number } | null = null;
+// Copilot token cache for main process, keyed by GitHub token
+let copilotTokenCache: Map<string, { token: string; expiresAt: number }> = new Map();
 
 export function clearCopilotTokenCache(): void {
-  copilotTokenCache = null;
+  copilotTokenCache.clear();
 }
 
 async function getCopilotApiToken(githubToken: string): Promise<string | null> {
   const now = Math.floor(Date.now() / 1000);
-  if (copilotTokenCache && copilotTokenCache.expiresAt > now + 60) {
-    return copilotTokenCache.token;
+  const cached = copilotTokenCache.get(githubToken);
+  if (cached && cached.expiresAt > now + 60) {
+    return cached.token;
   }
   try {
-    const response = await fetch('https://api.github.com/copilot_internal/v2/token', {
+    // This function is only called during active cowork sessions (app already ready).
+    const response = await session.defaultSession.fetch('https://api.github.com/copilot_internal/v2/token', {
       method: 'GET',
       headers: {
         'Authorization': `token ${githubToken}`,
@@ -126,7 +128,7 @@ async function getCopilotApiToken(githubToken: string): Promise<string | null> {
     });
     if (!response.ok) return null;
     const data = await response.json() as { token: string; expires_at: number };
-    copilotTokenCache = { token: data.token, expiresAt: data.expires_at };
+    copilotTokenCache.set(githubToken, { token: data.token, expiresAt: data.expires_at });
     return data.token;
   } catch {
     return null;
@@ -323,30 +325,32 @@ export async function resolveCurrentApiConfigAsync(target: OpenAICompatProxyTarg
   const syncResult = resolveCurrentApiConfig(target);
   if (!syncResult.config) return syncResult;
 
-  // Handle Copilot provider - exchange GitHub token for Copilot API token
+  // Handle Copilot provider - exchange GitHub token for Copilot API token.
+  // Use the actually matched provider (not just defaultModelProvider) to avoid
+  // overwriting a non-Copilot config when the preferred provider was skipped.
   const sqliteStore = getStore();
   const appConfig = sqliteStore?.get<AppConfig>('app_config');
-  const providerName = appConfig?.model?.defaultModelProvider;
-  if (providerName === 'copilot') {
-    const providerConfig = appConfig?.providers?.[providerName];
-    const githubToken = providerConfig?.apiKey?.trim();
-    if (!githubToken) {
-      return { config: null, error: 'GitHub token not configured for Copilot. Please sign in with GitHub in settings.' };
-    }
-    const copilotToken = await getCopilotApiToken(githubToken);
-    if (!copilotToken) {
-      return { config: null, error: 'Failed to get Copilot API token. Please check your GitHub Copilot subscription.' };
-    }
-    return {
-      config: {
-        ...syncResult.config,
-        apiKey: copilotToken,
-        baseURL: 'https://api.githubcopilot.com',
-        apiType: 'openai',
-      },
-    };
+  if (!appConfig) return syncResult;
+
+  const { matched } = resolveMatchedProvider(appConfig);
+  if (matched?.providerName !== 'copilot') return syncResult;
+
+  const githubToken = appConfig.providers?.['copilot']?.apiKey?.trim();
+  if (!githubToken) {
+    return { config: null, error: 'GitHub token not configured for Copilot. Please sign in with GitHub in settings.' };
   }
-  return syncResult;
+  const copilotToken = await getCopilotApiToken(githubToken);
+  if (!copilotToken) {
+    return { config: null, error: 'Failed to get Copilot API token. Please check your GitHub Copilot subscription.' };
+  }
+  return {
+    config: {
+      ...syncResult.config,
+      apiKey: copilotToken,
+      baseURL: 'https://api.githubcopilot.com',
+      apiType: 'openai',
+    },
+  };
 }
 
 export async function getCurrentApiConfigAsync(target: OpenAICompatProxyTarget = 'local'): Promise<CoworkApiConfig | null> {

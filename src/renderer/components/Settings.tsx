@@ -1266,7 +1266,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
     setCopilotSignInError(null);
     setCopilotDeviceFlow(null);
     try {
-      const result = await (window.electron as any).copilot.startDeviceFlow();
+      const result = await window.electron.copilot.startDeviceFlow();
       if (!result.success) {
         setCopilotSignInError(result.error || i18nService.t('copilotSignInFailed'));
         return;
@@ -1283,7 +1283,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
       }
       const pollIntervalMs = (result.interval || 5) * 1000;
       copilotPollTimerRef.current = window.setInterval(async () => {
-        const pollResult = await (window.electron as any).copilot.pollDeviceFlow(result.deviceCode);
+        const pollResult = await window.electron.copilot.pollDeviceFlow(result.deviceCode);
         if (pollResult.success && pollResult.accessToken) {
           if (copilotPollTimerRef.current != null) {
             window.clearInterval(copilotPollTimerRef.current);
@@ -1396,7 +1396,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
         return;
       }
       try {
-        const tokenResult = await (window.electron as any).copilot.getToken(providerConfig.apiKey);
+        const tokenResult = await window.electron.copilot.getToken(providerConfig.apiKey);
         if (!tokenResult.success || !tokenResult.token) {
           showTestResultModal({ success: false, message: tokenResult.error || i18nService.t('copilotTokenFetchFailed') }, testingProvider);
           setIsTesting(false);
@@ -2482,13 +2482,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice }) => {
                             {i18nService.t('copilotCopyCode')}
                           </button>
                         </div>
-                        <a
-                          href="#"
-                          onClick={(e) => { e.preventDefault(); void window.electron.shell.openExternal(copilotDeviceFlow.verificationUri); }}
-                          className="text-xs text-claude-accent hover:underline block"
+                        <button
+                          type="button"
+                          role="link"
+                          onClick={() => { void window.electron.shell.openExternal(copilotDeviceFlow.verificationUri); }}
+                          className="text-xs text-claude-accent hover:underline block text-left cursor-pointer"
                         >
                           {copilotDeviceFlow.verificationUri}
-                        </a>
+                        </button>
                         <div className="flex items-center gap-2 text-xs dark:text-claude-darkSecondaryText text-claude-secondaryText">
                           <div className="animate-spin h-3 w-3 border border-claude-accent border-t-transparent rounded-full" />
                           {i18nService.t('copilotWaitingForAuth')}

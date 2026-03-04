@@ -398,7 +398,7 @@ class ApiService {
       if (!githubToken) {
         throw new ApiError('GitHub token not configured for Copilot. Please sign in with GitHub in settings.');
       }
-      const tokenResult = await (window.electron as any).copilot.getToken(githubToken);
+      const tokenResult = await window.electron.copilot.getToken(githubToken);
       if (!tokenResult.success || !tokenResult.token) {
         throw new ApiError(tokenResult.error || 'Failed to get Copilot token. Please check your GitHub token in settings.');
       }
